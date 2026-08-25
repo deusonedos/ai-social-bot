@@ -18,6 +18,14 @@ const schema = z.object({
   OPENROUTER_APP_URL: z.string().default('https://github.com/deusonedos/ai-social-bot'),
   OPENROUTER_APP_NAME: z.string().default('AI Social Bot'),
 
+  /**
+   * Поиск в интернете. Без ключа бот работает как раньше, просто честно
+   * предупреждает, что не знает актуального.
+   * Бесплатный тариф Tavily: 1000 запросов в месяц, карта не нужна.
+   */
+  TAVILY_API_KEY: z.string().optional(),
+  SEARCH_MAX_RESULTS: z.coerce.number().int().positive().max(10).default(5),
+
   DATABASE_URL: z.string().min(1),
   /** Supabase/Neon требуют TLS, локальный Postgres — нет. */
   DATABASE_SSL: z.coerce.boolean().default(false),

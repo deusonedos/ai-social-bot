@@ -2,7 +2,8 @@ import { env } from '../config/env.js';
 import type { Attachment, IncomingMessage, StoredMessage } from '../core/types.js';
 import { estimateTokens, IMAGE_TOKEN_COST } from '../util/tokens.js';
 import type { ChatContentPart, ChatMessage } from './gateway.js';
-import { SUMMARY_PROMPT, SYSTEM_PROMPT, VISION_PROMPT } from './prompts.js';
+import { buildSystemPrompt, SUMMARY_PROMPT } from './prompts.js';
+import { formatForContext, type SearchResponse } from './search.js';
 
 /**
  * Собирает запрос к модели из системного промпта, сводки и последних сообщений
@@ -16,11 +17,14 @@ export function buildContext(params: {
   incoming: IncomingMessage;
   history: StoredMessage[];
   summary: string | null;
+  searchResults?: SearchResponse | null;
 }): ChatMessage[] {
-  const { incoming, history, summary } = params;
+  const { incoming, history, summary, searchResults } = params;
   const hasImages = incoming.attachments.some((a) => a.kind === 'image');
 
-  const messages: ChatMessage[] = [{ role: 'system', content: hasImages ? VISION_PROMPT : SYSTEM_PROMPT }];
+  const messages: ChatMessage[] = [
+    { role: 'system', content: buildSystemPrompt({ hasImages, hasSearch: Boolean(searchResults) }) },
+  ];
 
   if (summary) {
     messages.push({
@@ -29,7 +33,18 @@ export function buildContext(params: {
     });
   }
 
-  const budget = env.CONTEXT_TOKEN_BUDGET - (hasImages ? IMAGE_TOKEN_COST * incoming.attachments.length : 0);
+  // Результаты поиска идут последним системным сообщением — ближе всего к вопросу,
+  // чтобы модель не потеряла их за историей переписки.
+  if (searchResults) {
+    messages.push({ role: 'system', content: formatForContext(searchResults) });
+  }
+
+  // История ужимается под то, что осталось после картинок и результатов поиска:
+  // свежие данные важнее старой переписки, поэтому урезаем именно историю.
+  const budget =
+    env.CONTEXT_TOKEN_BUDGET -
+    (hasImages ? IMAGE_TOKEN_COST * incoming.attachments.length : 0) -
+    (searchResults ? estimateTokens(formatForContext(searchResults)) : 0);
   for (const m of trimToBudget(history, budget)) {
     messages.push({
       role: m.role,

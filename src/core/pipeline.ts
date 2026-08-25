@@ -1,5 +1,7 @@
 import { buildContext, buildSummaryRequest, shouldSummarize } from '../ai/context.js';
 import { AllModelsFailedError, ModelRouter } from '../ai/router.js';
+import { search } from '../ai/search.js';
+import { needsFreshInfo } from '../ai/search-trigger.js';
 import { env } from '../config/env.js';
 import * as db from '../db/index.js';
 import { logger } from '../util/logger.js';
@@ -47,7 +49,13 @@ export class Pipeline {
 
     const hasImages = incoming.attachments.some((a) => a.kind === 'image');
     const role = hasImages ? 'vision' : 'text';
-    const messages = buildContext({ incoming, history, summary });
+
+    // Поиск только для текстовых вопросов о свежем: к картинке с задачей
+    // интернет не нужен, а лишний запрос — лишняя секунда ожидания.
+    const searchResults =
+      !hasImages && incoming.text && needsFreshInfo(incoming.text) ? await search(incoming.text) : null;
+
+    const messages = buildContext({ incoming, history, summary, searchResults });
 
     let answer: string;
     let usedModel: string;
