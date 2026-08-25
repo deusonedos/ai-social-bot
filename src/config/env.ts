@@ -6,8 +6,10 @@ const schema = z.object({
   LOG_LEVEL: z.string().default('info'),
 
   TELEGRAM_BOT_TOKEN: z.string().min(10, 'получить у @BotFather'),
-  /** Пустой в dev: тогда работаем long polling, туннель не нужен. */
-  TELEGRAM_WEBHOOK_URL: z.string().url().optional(),
+  /**
+   * Секрет вебхука. Обязателен в проде: api/telegram.ts отвергает все запросы,
+   * если он не задан или не совпал. Локально (long polling) не нужен.
+   */
   TELEGRAM_WEBHOOK_SECRET: z.string().optional(),
 
   OPENROUTER_API_KEY: z.string().min(10),
@@ -71,11 +73,12 @@ const parsed = schema.safeParse({
 });
 
 if (!parsed.success) {
-  const issues = parsed.error.issues
-    .map((i) => `  ${i.path.join('.')}: ${i.message}`)
-    .join('\n');
-  console.error(`Некорректная конфигурация окружения:\n${issues}\n\nСм. .env.example`);
-  process.exit(1);
+  const issues = parsed.error.issues.map((i) => `  ${i.path.join('.')}: ${i.message}`).join('\n');
+  const message = `Некорректная конфигурация окружения:\n${issues}\n\nСм. .env.example`;
+  console.error(message);
+  // Бросаем, а не process.exit: в serverless выход из процесса даёт пустой
+  // ответ без объяснений, а исключение видно в логах Vercel как есть.
+  throw new Error(message);
 }
 
 export const env = parsed.data;
