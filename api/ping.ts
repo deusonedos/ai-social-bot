@@ -1,3 +1,5 @@
+import type { VercelRequest, VercelResponse } from '@vercel/node';
+
 /**
  * Диагностический эндпоинт: никаких импортов, никакой конфигурации.
  *
@@ -5,8 +7,8 @@
  * «сломался наш код при загрузке модулей». Если /api/ping отвечает,
  * а /api/telegram нет — дело в наших импортах, а не в Vercel.
  */
-export default function handler(): Response {
-  return Response.json({
+export default function handler(_req: VercelRequest, res: VercelResponse): void {
+  res.status(200).json({
     ok: true,
     runtime: process.version,
     nodeEnv: process.env.NODE_ENV ?? '(не задан)',

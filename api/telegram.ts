@@ -1,4 +1,5 @@
 import { waitUntil } from '@vercel/functions';
+import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { Api } from 'grammy';
 import type { Update } from 'grammy/types';
 import { ModelRouter } from '../src/ai/router.js';
@@ -9,6 +10,10 @@ import { logger } from '../src/util/logger.js';
 
 /**
  * Вебхук Telegram на Vercel.
+ *
+ * Сигнатура нодовская (req, res), а не веб-стандартная Request/Response:
+ * рантайм в папке api/ ждёт именно её и вызова res.end(). Возвращённый
+ * объект Response он игнорирует, и запрос висит до таймаута.
  *
  * Объекты создаются на уровне модуля, чтобы «тёплые» вызовы функции
  * переиспользовали их вместе с пулом соединений к базе.
@@ -26,35 +31,35 @@ function getIdentity(): Promise<BotIdentity> {
   return identity;
 }
 
-export default async function handler(request: Request): Promise<Response> {
-  if (request.method !== 'POST') {
-    return new Response('ok', { status: 200 });
+export default async function handler(req: VercelRequest, res: VercelResponse): Promise<void> {
+  if (req.method !== 'POST') {
+    res.status(200).send('ok');
+    return;
   }
 
   // Единственная защита вебхука: URL публичный, и без секрета его мог бы
   // дёргать кто угодно, скармливая боту поддельные сообщения.
-  const secret = request.headers.get('x-telegram-bot-api-secret-token');
+  const secret = req.headers['x-telegram-bot-api-secret-token'];
   if (!env.TELEGRAM_WEBHOOK_SECRET || secret !== env.TELEGRAM_WEBHOOK_SECRET) {
     logger.warn('запрос к вебхуку с неверным секретом');
-    return new Response('forbidden', { status: 403 });
+    res.status(403).send('forbidden');
+    return;
   }
 
-  let update: Update;
-  try {
-    update = (await request.json()) as Update;
-  } catch {
-    return new Response('bad request', { status: 400 });
+  const update = req.body as Update | undefined;
+  if (!update || typeof update.update_id !== 'number') {
+    res.status(400).send('bad request');
+    return;
   }
-
-  const bot = await getIdentity();
 
   // Отвечаем Telegram сразу, а работу продолжаем в фоне: иначе он посчитает
   // вебхук провалившимся по таймауту и пришлёт тот же апдейт заново.
   waitUntil(
-    handleUpdate({ update, api, bot, pipeline, defer: (work) => waitUntil(work) }).catch((err) =>
-      logger.error({ err, updateId: update.update_id }, 'обработка апдейта упала'),
-    ),
+    (async () => {
+      const bot = await getIdentity();
+      await handleUpdate({ update, api, bot, pipeline, defer: (work) => waitUntil(work) });
+    })().catch((err) => logger.error({ err, updateId: update.update_id }, 'обработка апдейта упала')),
   );
 
-  return new Response('ok', { status: 200 });
+  res.status(200).send('ok');
 }
