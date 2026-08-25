@@ -118,6 +118,9 @@ async function main(): Promise<void> {
   const databaseUrl = await ask('  DATABASE_URL: ', (v) => {
     if (!v.startsWith('postgres://') && !v.startsWith('postgresql://')) return 'Должна начинаться с postgres://';
     if (v.includes('[YOUR-PASSWORD]')) return 'Замени [YOUR-PASSWORD] на настоящий пароль базы';
+    if (v.includes('.supabase.co')) {
+      return 'Это Direct connection — он живёт только в IPv6 и с Vercel не работает. Нужна вкладка Transaction pooler.';
+    }
     if (!v.includes(':6543')) {
       return 'Нужен Transaction pooler с портом 6543. Порт 5432 с Vercel не заработает.';
     }
