@@ -77,6 +77,20 @@ export async function search(query: string): Promise<SearchResponse | null> {
   }
 }
 
+/**
+ * Список источников, который дописывается к ответу.
+ *
+ * Составляем его сами, а не просим модель: она выдавала «Источники: [1], [2]»
+ * без единого адреса, и ссылки получались некликабельными. Здесь адреса точные
+ * по построению, а Telegram сам делает ссылку из голого URL в обычном тексте —
+ * parse_mode для этого не нужен.
+ */
+export function formatSources(sr: SearchResponse, limit = 3): string {
+  const urls = [...new Set(sr.results.map((r) => r.url))].slice(0, limit);
+  if (urls.length === 0) return '';
+  return `\n\nИсточники:\n${urls.join('\n')}`;
+}
+
 /** Готовит найденное для подстановки в контекст модели. */
 export function formatForContext(sr: SearchResponse): string {
   const lines = [`Результаты поиска в интернете по запросу «${sr.query}» (получены только что):`];

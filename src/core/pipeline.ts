@@ -1,11 +1,11 @@
 import { buildContext, buildSummaryRequest, shouldSummarize } from '../ai/context.js';
 import { AllModelsFailedError, ModelRouter } from '../ai/router.js';
-import { search } from '../ai/search.js';
+import { formatSources, search } from '../ai/search.js';
 import { needsFreshInfo } from '../ai/search-trigger.js';
 import { env } from '../config/env.js';
 import * as db from '../db/index.js';
 import { logger } from '../util/logger.js';
-import { stripReasoning } from '../util/text.js';
+import { cleanForTelegram, stripReasoning } from '../util/text.js';
 import { checkRateLimit } from './ratelimit.js';
 import type { IncomingMessage } from './types.js';
 
@@ -61,7 +61,10 @@ export class Pipeline {
     let usedModel: string;
     try {
       const result = await this.router.complete(role, messages);
-      answer = stripReasoning(result.text);
+      answer = cleanForTelegram(stripReasoning(result.text));
+      // Ссылки дописываем сами: модель ссылалась на источники номерами,
+      // а голый URL Telegram превращает в кликабельную ссылку без parse_mode.
+      if (searchResults) answer += formatSources(searchResults);
       usedModel = result.model;
 
       defer(

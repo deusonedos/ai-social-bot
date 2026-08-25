@@ -57,8 +57,12 @@ const freeVision = (id: string, maxTokens = CHAT_TOKENS): ModelSpec => ({
  */
 export const MODEL_CHAINS: Record<ModelRole, ModelSpec[]> = {
   text: [
-    freeText('z-ai/glm-5.2:free'),
+    // Nemotron впереди намеренно: glm-5.2 популярна и регулярно отдаёт 429
+    // «temporarily rate-limited upstream». Каждая такая попытка не бесплатна —
+    // OpenRouter считает её в лимит 20 запросов в минуту независимо от исхода,
+    // поэтому держать заведомо занятую модель первой невыгодно.
     freeText('nvidia/nemotron-3-super-120b-a12b:free'),
+    freeText('z-ai/glm-5.2:free'),
     freeText('minimax/minimax-m2.7:free'),
     // Роутер OpenRouter по случайным живым бесплатным моделям — страховка на случай,
     // когда все явно перечисленные недоступны.

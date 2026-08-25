@@ -1,7 +1,7 @@
 /** Быстрая проверка чистой логики: не требует ни токенов, ни БД. */
 import { splitForTelegram } from '../src/bot/telegram/format.js';
 import { stripMention } from '../src/bot/telegram/triggers.js';
-import { stripReasoning } from '../src/util/text.js';
+import { cleanForTelegram, stripReasoning } from '../src/util/text.js';
 import { needsFreshInfo } from '../src/ai/search-trigger.js';
 
 let failed = 0;
@@ -53,6 +53,30 @@ for (const q of shouldSearch) {
 for (const q of shouldNotSearch) {
   check(`не ищет: "${q.slice(0, 45)}"`, !needsFreshInfo(q));
 }
+
+// --- Чистка ответа для Telegram ---------------------------------------------
+check(
+  'маркер цитирования вырезается',
+  cleanForTelegram('The Witcher 4 выйдет в 2028.【1†Л0-L3】') === 'The Witcher 4 выйдет в 2028.',
+  JSON.stringify(cleanForTelegram('The Witcher 4 выйдет в 2028.【1†Л0-L3】')),
+);
+check(
+  'сноски-номера вырезаются',
+  cleanForTelegram('Билеты продаются [1], отмены не было [2,3].') === 'Билеты продаются, отмены не было.',
+  JSON.stringify(cleanForTelegram('Билеты продаются [1], отмены не было [2,3].')),
+);
+check(
+  'строка «Источники: [1], [2]» убирается',
+  !cleanForTelegram('Ответ тут.\nИсточники: [1], [2], [3].').includes('Источники'),
+);
+check('звёздочки жирного убираются', cleanForTelegram('внутри студии **Polaris** известен') === 'внутри студии Polaris известен');
+check('заголовки Markdown убираются', cleanForTelegram('## Что известно\nтекст') === 'Что известно\nтекст');
+check('обычный текст не портится', cleanForTelegram('Просто ответ без разметки.') === 'Просто ответ без разметки.');
+check(
+  'умножение не ломается',
+  cleanForTelegram('2 * 3 = 6 и 4 * 5 = 20') === '2 * 3 = 6 и 4 * 5 = 20',
+  JSON.stringify(cleanForTelegram('2 * 3 = 6 и 4 * 5 = 20')),
+);
 
 console.log(failed === 0 ? '\nВсе проверки прошли.' : `\nПровалено: ${failed}`);
 process.exit(failed === 0 ? 0 : 1);
