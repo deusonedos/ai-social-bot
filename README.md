@@ -18,29 +18,72 @@ AI-помощник, которого зовут прямо в чат. Пони�
 
 Голосовые пока не подключены — под них есть задел (см. ниже).
 
-## Запуск
+## Где что живёт
 
-Нужен Node.js 20+ и любой Postgres (локальный, Supabase, Neon).
+| Слой | Где |
+|---|---|
+| Код | GitHub, автодеплой в Vercel при каждом push |
+| Процесс | Vercel Functions, вебхук `api/telegram.ts` |
+| Данные | Supabase Postgres |
+| Модели | OpenRouter |
+
+## Запуск локально
+
+Нужен Node.js 20+ и любой Postgres.
 
 ```bash
 npm install
 cp .env.example .env
 ```
 
-Заполни в `.env` три обязательных значения:
+Заполни в `.env`:
 
 - `TELEGRAM_BOT_TOKEN` — у [@BotFather](https://t.me/BotFather), команда `/newbot`
 - `OPENROUTER_API_KEY` — на [openrouter.ai/keys](https://openrouter.ai/keys)
-- `DATABASE_URL` — строка подключения к Postgres (для Supabase/Neon ещё `DATABASE_SSL=true`)
-
-Затем:
+- `DATABASE_URL` — строка подключения к Postgres (для Supabase ещё `DATABASE_SSL=true`)
 
 ```bash
+npm run webhook:delete   # снять вебхук, иначе Telegram не отдаст апдейты
 npm run dev
 ```
 
-Схема БД применяется автоматически при старте. В dev-режиме бот работает через long
+Схема БД применяется автоматически при старте. Локально бот работает через long
 polling — туннель не нужен.
+
+## Деплой на Vercel
+
+Переменные окружения задаются в настройках проекта Vercel (не в репозитории — он публичный):
+
+| Переменная | Значение |
+|---|---|
+| `TELEGRAM_BOT_TOKEN` | токен от @BotFather |
+| `OPENROUTER_API_KEY` | ключ OpenRouter |
+| `DATABASE_URL` | **Transaction pooler** Supabase, порт 6543 |
+| `DATABASE_SSL` | `true` |
+| `TELEGRAM_WEBHOOK_SECRET` | `openssl rand -hex 32` |
+| `CRON_SECRET` | `openssl rand -hex 32` |
+
+Про `DATABASE_URL` важно: нужен именно **Transaction pooler (6543)**, а не Direct
+connection. Прямое подключение к Supabase на бесплатном тарифе доступно только по IPv6,
+а transaction-режим рассчитан на короткоживущие serverless-подключения.
+
+После деплоя один раз зарегистрировать вебхук:
+
+```bash
+npm run webhook:set https://ai-social-bot.vercel.app
+```
+
+Проверить состояние — `npm run webhook:info`.
+
+### Почему состояние в Postgres, а не в памяти
+
+В serverless процесс не живёт между запросами, а функции масштабируются автоматически.
+Поэтому в базу вынесены три вещи, которые в обычном приложении лежали бы в памяти:
+
+- **лимит обращений к OpenRouter** — у бесплатного тира 20 запросов в минуту на весь
+  аккаунт, и без общего счётчика двадцать одновременных сообщений мгновенно дали бы 429;
+- **circuit breaker** — чтобы упавшую модель не пробовал заново каждый инстанс функции;
+- **рейт-лимиты** пользователя и чата.
 
 ## Настройка бота в BotFather
 
@@ -73,11 +116,13 @@ reset - забыть историю этого чата
 ## Команды
 
 ```bash
-npm run dev            # разработка с автоперезапуском
-npm test               # быстрые проверки логики (без токенов и БД)
-npm run typecheck      # проверка типов
-npm run models:check   # сверить модели с живым каталогом OpenRouter
-npm run build && npm start
+npm run dev             # локальный запуск (long polling)
+npm test                # быстрые проверки логики (без токенов и БД)
+npm run typecheck       # проверка типов
+npm run models:check    # сверить модели с живым каталогом OpenRouter
+npm run webhook:set URL # зарегистрировать вебхук
+npm run webhook:info    # текущее состояние вебхука
+npm run webhook:delete  # снять вебхук (нужно перед локальным запуском)
 ```
 
 ### `npm run models:check` — запускай регулярно
@@ -99,20 +144,24 @@ npm run build && npm start
 ## Структура
 
 ```
+api/            точки входа Vercel: вебхук Telegram и cron уборки
 src/
 ├── config/     env (zod) и реестр моделей — единственное место с их именами
 ├── ai/         шлюз OpenRouter, роутер с фолбэком, сборка контекста, промпты
-├── core/       пайплайн, очередь, рейт-лимиты, общие типы
+├── core/       пайплайн, троттлинг, рейт-лимиты, общие типы
 ├── db/         схема и запросы
 ├── bot/
-│   └── telegram/   триггеры, медиа, форматирование ответа
+│   └── telegram/   обработчик, триггеры, медиа, форматирование ответа
 └── util/
-scripts/        проверка моделей и смоук-тесты
+scripts/        проверка моделей, смоук-тесты, управление вебхуком
 ```
 
 Пайплайн (`src/core/pipeline.ts`) не знает про Telegram — адаптер приводит события
 к общим типам и доставляет ответ. Threads и Instagram добавляются как новые адаптеры,
 без изменений в ядре.
+
+Обработка апдейта (`src/bot/telegram/handler.ts`) общая для обоих режимов: вебхука
+на Vercel и локального long polling. Отличаются они только источником апдейта.
 
 ## Задел под голосовые
 

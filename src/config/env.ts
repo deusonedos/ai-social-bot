@@ -27,8 +27,21 @@ const schema = z.object({
 
   MAX_REQUESTS_PER_USER_PER_MIN: z.coerce.number().int().positive().default(3),
   MAX_REQUESTS_PER_CHAT_PER_MIN: z.coerce.number().int().positive().default(10),
-  /** Сколько сообщений обрабатываем одновременно. Бесплатные модели медленные. */
+  /** Сколько сообщений обрабатываем одновременно в режиме long polling. */
   WORKER_CONCURRENCY: z.coerce.number().int().positive().default(4),
+
+  /**
+   * Лимит OpenRouter — 20 запросов в минуту на аккаунт. Берём 18: запас на служебные
+   * вызовы (суммаризация) и на расхождение наших минутных окон с их учётом.
+   */
+  OPENROUTER_RPM_LIMIT: z.coerce.number().int().positive().default(18),
+  /** Сколько ждать освобождения слота, прежде чем сдаться. */
+  MODEL_SLOT_WAIT_MS: z.coerce.number().int().nonnegative().default(75_000),
+
+  /** Включается автоматически на Vercel: меняет размер пула соединений. */
+  SERVERLESS: z.coerce.boolean().default(false),
+  /** Защита cron-эндпоинта на Vercel. Если не задан — проверка не выполняется. */
+  CRON_SECRET: z.string().optional(),
 
   /** Целевой размер контекста в токенах — намеренно меньше окна моделей. */
   CONTEXT_TOKEN_BUDGET: z.coerce.number().int().positive().default(6000),
@@ -51,7 +64,11 @@ const schema = z.object({
     ),
 });
 
-const parsed = schema.safeParse(process.env);
+const parsed = schema.safeParse({
+  ...process.env,
+  // Vercel сам выставляет VERCEL=1 — не заставляем задавать это руками.
+  SERVERLESS: process.env.SERVERLESS ?? (process.env.VERCEL ? 'true' : 'false'),
+});
 
 if (!parsed.success) {
   const issues = parsed.error.issues

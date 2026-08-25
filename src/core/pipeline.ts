@@ -13,14 +13,20 @@ export type PipelineResult =
   | { kind: 'error'; text: string };
 
 /**
+ * Куда отдать фоновую работу, которая не должна задерживать ответ пользователю.
+ * На Vercel сюда передаётся waitUntil, локально — обычный запуск промиса.
+ */
+export type Defer = (work: Promise<unknown>) => void;
+
+/**
  * Обработка одного сообщения — одинаковая для всех платформ.
  * Адаптеры отвечают только за нормализацию входа и доставку ответа.
  */
 export class Pipeline {
   constructor(private readonly router: ModelRouter) {}
 
-  async handle(incoming: IncomingMessage): Promise<PipelineResult> {
-    const limit = checkRateLimit(incoming.userId, incoming.conversationKey);
+  async handle(incoming: IncomingMessage, defer: Defer = (p) => void p): Promise<PipelineResult> {
+    const limit = await checkRateLimit(incoming.userId, incoming.conversationKey);
     if (!limit.ok) {
       logger.debug({ userId: incoming.userId, reason: limit.reason }, 'сработал рейт-лимит');
       // Молчим вместо ответа: иначе флуд превращается в удвоенный флуд.
@@ -44,57 +50,91 @@ export class Pipeline {
     const messages = buildContext({ incoming, history, summary });
 
     let answer: string;
+    let usedModel: string;
     try {
       const result = await this.router.complete(role, messages);
       answer = stripReasoning(result.text);
+      usedModel = result.model;
 
-      await db.logUsage({
-        conversationId,
-        model: result.model,
-        roleName: role,
-        inputTokens: result.inputTokens,
-        outputTokens: result.outputTokens,
-      });
-      logger.info(
-        { model: result.model, role, conversationKey: incoming.conversationKey },
-        'ответ сформирован',
+      defer(
+        db
+          .logUsage({
+            conversationId,
+            model: result.model,
+            roleName: role,
+            inputTokens: result.inputTokens,
+            outputTokens: result.outputTokens,
+          })
+          .catch((err) => logger.warn({ err }, 'не удалось записать usage')),
       );
+      logger.info({ model: result.model, role, conversationKey: incoming.conversationKey }, 'ответ сформирован');
     } catch (err) {
       if (err instanceof AllModelsFailedError) {
-        return { kind: 'error', text: 'Сейчас все модели заняты. Попробуй через минуту.' };
+        return {
+          kind: 'error',
+          text:
+            err.reason === 'throttled'
+              ? 'Сейчас слишком много запросов ко мне. Попробуй через минуту.'
+              : 'Модели временно недоступны. Попробуй чуть позже.',
+        };
       }
       logger.error({ err }, 'пайплайн упал');
       return { kind: 'error', text: 'Что-то пошло не так. Попробуй ещё раз.' };
     }
 
-    await db.saveMessage({
-      conversationId,
-      platformUserId: incoming.userId,
-      userName: incoming.userName,
-      role: 'user',
-      content: incoming.text || (hasImages ? '[изображение]' : ''),
-      hasMedia: incoming.attachments.length > 0,
-    });
-    await db.saveMessage({
-      conversationId,
-      platformUserId: null,
-      userName: null,
-      role: 'assistant',
-      content: answer,
-    });
-
-    // Сводка пересобирается в фоне: пользователь не должен ждать служебный вызов.
-    void this.maybeSummarize(conversationId, summary);
+    // Сохранение и сводка не должны задерживать ответ: пользователь ждёт текст,
+    // а не запись в базу.
+    defer(
+      this.persistAndSummarize({
+        conversationId,
+        incoming,
+        answer,
+        usedModel,
+        hasImages,
+        previousSummary: summary,
+      }),
+    );
 
     return { kind: 'reply', text: answer };
   }
 
-  private async maybeSummarize(conversationId: number, previous: string | null): Promise<void> {
+  private async persistAndSummarize(params: {
+    conversationId: number;
+    incoming: IncomingMessage;
+    answer: string;
+    usedModel: string;
+    hasImages: boolean;
+    previousSummary: string | null;
+  }): Promise<void> {
+    const { conversationId, incoming, answer, usedModel, hasImages, previousSummary } = params;
+
+    try {
+      await db.saveMessage({
+        conversationId,
+        platformUserId: incoming.userId,
+        userName: incoming.userName,
+        role: 'user',
+        content: incoming.text || (hasImages ? '[изображение]' : ''),
+        hasMedia: incoming.attachments.length > 0,
+      });
+      await db.saveMessage({
+        conversationId,
+        platformUserId: null,
+        userName: null,
+        role: 'assistant',
+        content: answer,
+        model: usedModel,
+      });
+    } catch (err) {
+      logger.error({ err, conversationId }, 'не удалось сохранить сообщения');
+      return;
+    }
+
     try {
       const history = await db.getRecentMessages(conversationId, 200);
       if (!shouldSummarize(history)) return;
 
-      const result = await this.router.complete('summary', buildSummaryRequest(history, previous), 0.3);
+      const result = await this.router.complete('summary', buildSummaryRequest(history, previousSummary), 0.3);
       await db.upsertSummary(conversationId, stripReasoning(result.text));
       await db.logUsage({
         conversationId,

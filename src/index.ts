@@ -1,23 +1,48 @@
+/**
+ * Локальный режим разработки: long polling, туннель не нужен.
+ *
+ * В продакшне на Vercel точка входа другая — api/telegram.ts. Общая часть
+ * обработки живёт в src/bot/telegram/handler.ts, так что оба режима ведут себя
+ * одинаково.
+ */
+import { Bot } from 'grammy';
 import { ModelRouter } from './ai/router.js';
-import { createTelegramBot } from './bot/telegram/index.js';
+import { handleUpdate } from './bot/telegram/handler.js';
 import { env } from './config/env.js';
 import { Pipeline } from './core/pipeline.js';
+import { TaskQueue } from './core/queue.js';
 import * as db from './db/index.js';
 import { logger } from './util/logger.js';
 
 async function main(): Promise<void> {
   await db.migrate();
 
-  const router = new ModelRouter(db.quotaTracker);
-  const pipeline = new Pipeline(router);
-  const bot = await createTelegramBot(pipeline);
+  const pipeline = new Pipeline(new ModelRouter());
+  const bot = new Bot(env.TELEGRAM_BOT_TOKEN);
+  await bot.init();
 
-  // Суточные лимиты OpenRouter считаются по UTC — сбрасываем флаг overflow тогда же.
-  scheduleDailyReset(() => {
-    router.resetDaily();
-    void db.pruneProcessedUpdates();
-    logger.info('суточные счётчики сброшены');
+  const identity = { id: bot.botInfo.id, username: bot.botInfo.username };
+  const queue = new TaskQueue(env.WORKER_CONCURRENCY);
+
+  logger.info({ username: identity.username }, 'бот инициализирован');
+
+  bot.on('message', (ctx) => {
+    // Приём и обработка разнесены: модели отвечают медленно, а grammY
+    // не должен ждать их, удерживая цикл получения апдейтов.
+    queue.push({
+      id: `tg:${ctx.update.update_id}`,
+      run: () =>
+        handleUpdate({
+          update: ctx.update,
+          api: bot.api,
+          bot: identity,
+          pipeline,
+          defer: (work) => void Promise.resolve(work).catch(() => {}),
+        }),
+    });
   });
+
+  bot.catch((err) => logger.error({ err: err.error }, 'ошибка grammY'));
 
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'останавливаюсь');
@@ -28,35 +53,16 @@ async function main(): Promise<void> {
   process.once('SIGINT', () => void shutdown('SIGINT'));
   process.once('SIGTERM', () => void shutdown('SIGTERM'));
 
-  if (env.TELEGRAM_WEBHOOK_URL) {
-    // Продакшн: вебхук с секретом, чтобы принимать апдейты только от Telegram.
-    await bot.api.setWebhook(env.TELEGRAM_WEBHOOK_URL, {
-      secret_token: env.TELEGRAM_WEBHOOK_SECRET,
-      drop_pending_updates: true,
-    });
-    logger.warn('webhook установлен, но HTTP-сервер ещё не поднят — для локальной разработки убери TELEGRAM_WEBHOOK_URL');
-  } else {
-    // Локальная разработка: long polling, туннель не нужен.
-    await bot.api.deleteWebhook({ drop_pending_updates: true });
-    logger.info('запускаюсь в режиме long polling');
-    void bot.start({ onStart: (info) => logger.info({ username: info.username }, 'бот принимает сообщения') });
-  }
-}
+  // Локальный режим и вебхук взаимоисключающи: пока висит вебхук,
+  // Telegram не отдаёт апдейты через getUpdates.
+  await bot.api.deleteWebhook({ drop_pending_updates: true });
+  logger.info('запускаюсь в режиме long polling');
+  void bot.start({ onStart: (info) => logger.info({ username: info.username }, 'бот принимает сообщения') });
 
-function scheduleDailyReset(fn: () => void): void {
-  const now = new Date();
-  const nextUtcMidnight = Date.UTC(
-    now.getUTCFullYear(),
-    now.getUTCMonth(),
-    now.getUTCDate() + 1,
-    0,
-    0,
-    5,
-  );
-  setTimeout(() => {
-    fn();
-    setInterval(fn, 24 * 60 * 60 * 1000).unref();
-  }, nextUtcMidnight - now.getTime()).unref();
+  setInterval(() => {
+    void db.pruneRateCounters().catch(() => {});
+    void db.pruneProcessedUpdates().catch(() => {});
+  }, 60 * 60 * 1000).unref();
 }
 
 main().catch((err) => {

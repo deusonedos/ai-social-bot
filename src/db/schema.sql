@@ -61,6 +61,34 @@ CREATE TABLE IF NOT EXISTS processed_updates (
   PRIMARY KEY (platform, update_id)
 );
 
+-- Счётчики частоты запросов с фиксированным окном в одну минуту.
+--
+-- В serverless состояние между вызовами не живёт, поэтому лимиты переехали из памяти
+-- в базу. Фиксированное окно вместо скользящего выбрано намеренно: оно считается одним
+-- UPSERT'ом и не требует хранить отметку каждого запроса.
+--
+-- Здесь же лежит глобальный счётчик обращений к OpenRouter: у бесплатного тира лимит
+-- 20 запросов в минуту на весь аккаунт, а serverless масштабируется автоматически
+-- и без общего счётчика мгновенно этот лимит пробьёт.
+CREATE TABLE IF NOT EXISTS rate_counters (
+  bucket_key   TEXT NOT NULL,
+  window_start TIMESTAMPTZ NOT NULL,
+  hits         INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (bucket_key, window_start)
+);
+
+CREATE INDEX IF NOT EXISTS rate_counters_window_idx ON rate_counters (window_start);
+
+-- Circuit breaker: какие модели сейчас признаны нерабочими и до какого момента.
+CREATE TABLE IF NOT EXISTS model_health (
+  model_id    TEXT PRIMARY KEY,
+  failures    INTEGER NOT NULL DEFAULT 0,
+  open_until  TIMESTAMPTZ,
+  -- Модель исчезла из каталога OpenRouter: исключаем до ручной правки конфига.
+  dead        BOOLEAN NOT NULL DEFAULT false,
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Закрываем таблицы от Data API.
 --
 -- На Supabase всё, что лежит в схеме public, автоматически доступно через PostgREST
@@ -76,3 +104,5 @@ ALTER TABLE summaries          ENABLE ROW LEVEL SECURITY;
 ALTER TABLE usage_log          ENABLE ROW LEVEL SECURITY;
 ALTER TABLE quota_usage        ENABLE ROW LEVEL SECURITY;
 ALTER TABLE processed_updates  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE rate_counters      ENABLE ROW LEVEL SECURITY;
+ALTER TABLE model_health       ENABLE ROW LEVEL SECURITY;

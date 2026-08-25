@@ -12,9 +12,13 @@
     "start": "node dist/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "tsx scripts/smoke.ts",
-    "models:check": "tsx scripts/check-models.ts"
+    "models:check": "tsx scripts/check-models.ts",
+    "webhook:set": "tsx scripts/set-webhook.ts",
+    "webhook:info": "tsx scripts/set-webhook.ts --info",
+    "webhook:delete": "tsx scripts/set-webhook.ts --delete"
   },
   "dependencies": {
+    "@vercel/functions": "^3.9.5",
     "dotenv": "^16.4.5",
     "grammy": "^1.30.0",
     "pg": "^8.13.1",
@@ -24,6 +28,7 @@
   "devDependencies": {
     "@types/node": "^22.9.0",
     "@types/pg": "^8.11.10",
+    "@vercel/node": "^7.0.0",
     "pino-pretty": "^13.0.0",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3"
