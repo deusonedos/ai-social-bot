@@ -86,8 +86,12 @@ CREATE TABLE IF NOT EXISTS model_health (
   open_until  TIMESTAMPTZ,
   -- Модель исчезла из каталога OpenRouter: исключаем до ручной правки конфига.
   dead        BOOLEAN NOT NULL DEFAULT false,
+  -- Текст последней ошибки: без него причину падения модели приходится угадывать.
+  last_error  TEXT,
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE model_health ADD COLUMN IF NOT EXISTS last_error TEXT;
 
 -- Закрываем таблицы от Data API.
 --

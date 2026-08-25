@@ -83,7 +83,13 @@ export class ModelRouter {
     temperature?: number,
   ): Promise<CompletionResult> {
     const call = () =>
-      this.gateway.complete({ model: spec.id, messages, maxTokens: spec.maxTokens, temperature });
+      this.gateway.complete({
+        model: spec.id,
+        messages,
+        maxTokens: spec.maxTokens,
+        temperature,
+        reasoningEffort: spec.reasoningEffort,
+      });
 
     try {
       return await call();
@@ -103,7 +109,9 @@ export class ModelRouter {
         await db.markModelDead(modelId);
         return;
       }
-      await db.recordModelFailure(modelId, BREAKER_THRESHOLD, BREAKER_COOLDOWN_MS);
+      const reason = err instanceof Error ? `${(err as GatewayError).kind ?? 'error'}: ${err.message}` : String(err);
+      logger.warn({ model: modelId, reason }, 'модель не ответила');
+      await db.recordModelFailure(modelId, BREAKER_THRESHOLD, BREAKER_COOLDOWN_MS, reason);
     } catch (dbErr) {
       logger.warn({ dbErr, modelId }, 'не удалось записать состояние модели');
     }

@@ -18,6 +18,14 @@ export interface CompletionRequest {
   maxTokens: number;
   temperature?: number;
   timeoutMs?: number;
+  /**
+   * Глубина размышлений для reasoning-моделей.
+   *
+   * Нам нужен короткий ответ в чат, а не долгий разбор: при высоком усилии
+   * модель успевает потратить весь max_tokens на рассуждения и вернуть пустой
+   * content — то есть запрос израсходован, а ответа нет.
+   */
+  reasoningEffort?: 'low' | 'medium' | 'high';
 }
 
 export interface CompletionResult {
@@ -89,6 +97,8 @@ export class OpenRouterGateway {
           messages: req.messages,
           max_tokens: req.maxTokens,
           temperature: req.temperature ?? 0.6,
+          // OpenRouter игнорирует параметр у моделей, которые его не понимают.
+          ...(req.reasoningEffort ? { reasoning: { effort: req.reasoningEffort } } : {}),
         }),
       });
     } catch (err) {
@@ -120,8 +130,18 @@ export class OpenRouterGateway {
     const content = json.choices?.[0]?.message?.content ?? '';
     if (!content.trim()) {
       // Reasoning-модель могла израсходовать весь бюджет на размышления и не дойти
-      // до ответа. Для нас это неуспех — идём к следующей модели.
-      throw new GatewayError('server', req.model, 'пустой ответ модели');
+      // до ответа. Для нас это неуспех — идём к следующей модели. Различаем два
+      // случая явно: пустота из-за размышлений лечится лимитами, а просто пустой
+      // ответ — признак проблем на стороне провайдера.
+      const reasoning = json.choices?.[0]?.message?.reasoning ?? '';
+      const spentOnReasoning = reasoning.trim().length > 0;
+      throw new GatewayError(
+        'server',
+        req.model,
+        spentOnReasoning
+          ? `модель потратила весь max_tokens (${req.maxTokens}) на размышления и не выдала ответ`
+          : 'пустой ответ модели',
+      );
     }
 
     return {

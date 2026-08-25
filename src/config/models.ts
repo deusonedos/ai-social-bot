@@ -17,22 +17,37 @@ export interface ModelSpec {
   expectOutput: Array<'text' | 'image' | 'audio'>;
   free: boolean;
   maxTokens: number;
+  /**
+   * Глубина размышлений. Почти все актуальные бесплатные модели — reasoning,
+   * и при усилии по умолчанию они успевают израсходовать весь max_tokens на
+   * рассуждения, вернув пустой ответ. Запрос при этом потрачен: OpenRouter
+   * считает его в лимит 20 в минуту независимо от результата.
+   */
+  reasoningEffort?: 'low' | 'medium' | 'high';
 }
 
-const freeText = (id: string, maxTokens = 1200): ModelSpec => ({
+/**
+ * Бюджет ответа. 2000 вместо прежних 1200: у reasoning-моделей в этот лимит
+ * входят и размышления, и сам ответ, а короткого ответа в чат надо ещё достичь.
+ */
+const CHAT_TOKENS = 2000;
+
+const freeText = (id: string, maxTokens = CHAT_TOKENS): ModelSpec => ({
   id,
   expectInput: ['text'],
   expectOutput: ['text'],
   free: true,
   maxTokens,
+  reasoningEffort: 'low',
 });
 
-const freeVision = (id: string, maxTokens = 1200): ModelSpec => ({
+const freeVision = (id: string, maxTokens = CHAT_TOKENS): ModelSpec => ({
   id,
   expectInput: ['text', 'image'],
   expectOutput: ['text'],
   free: true,
   maxTokens,
+  reasoningEffort: 'low',
 });
 
 /**
@@ -47,7 +62,14 @@ export const MODEL_CHAINS: Record<ModelRole, ModelSpec[]> = {
     freeText('minimax/minimax-m2.7:free'),
     // Роутер OpenRouter по случайным живым бесплатным моделям — страховка на случай,
     // когда все явно перечисленные недоступны.
-    { id: 'openrouter/free', expectInput: ['text'], expectOutput: ['text'], free: true, maxTokens: 1200 },
+    {
+      id: 'openrouter/free',
+      expectInput: ['text'],
+      expectOutput: ['text'],
+      free: true,
+      maxTokens: CHAT_TOKENS,
+      reasoningEffort: 'low',
+    },
   ],
 
   vision: [
@@ -59,14 +81,18 @@ export const MODEL_CHAINS: Record<ModelRole, ModelSpec[]> = {
 
   // Служебные вызовы идут на самые дешёвые и быстрые модели: они не должны
   // конкурировать за качество с основным ответом.
+  //
+  // Лимиты с запасом относительно нужного объёма: сводка занимает ~200 токенов,
+  // но у reasoning-моделей в лимит входят ещё и рассуждения, и при нехватке
+  // модель возвращает пустоту, потратив запрос впустую.
   summary: [
-    freeText('nvidia/nemotron-3.5-lightning:free', 500),
-    freeText('nvidia/nemotron-3-super-120b-a12b:free', 500),
+    freeText('nvidia/nemotron-3.5-lightning:free', 900),
+    freeText('nvidia/nemotron-3-super-120b-a12b:free', 900),
   ],
 
   classify: [
-    freeText('liquid/lfm-2.5-2.6b:free', 50),
-    freeText('nvidia/nemotron-3.5-lightning:free', 50),
+    freeText('liquid/lfm-2.5-2.6b:free', 300),
+    freeText('nvidia/nemotron-3.5-lightning:free', 300),
   ],
 
   moderation: [

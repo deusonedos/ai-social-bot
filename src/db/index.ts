@@ -222,10 +222,15 @@ export async function getUnhealthyModels(): Promise<Map<string, ModelHealth>> {
   );
 }
 
-export async function recordModelFailure(modelId: string, threshold: number, cooldownMs: number): Promise<void> {
+export async function recordModelFailure(
+  modelId: string,
+  threshold: number,
+  cooldownMs: number,
+  lastError?: string,
+): Promise<void> {
   await pool.query(
-    `INSERT INTO model_health (model_id, failures, updated_at)
-     VALUES ($1, 1, now())
+    `INSERT INTO model_health (model_id, failures, last_error, updated_at)
+     VALUES ($1, 1, $4, now())
      ON CONFLICT (model_id) DO UPDATE SET
        failures = CASE
          WHEN model_health.failures + 1 >= $2 THEN 0
@@ -235,8 +240,9 @@ export async function recordModelFailure(modelId: string, threshold: number, coo
          WHEN model_health.failures + 1 >= $2 THEN now() + ($3 || ' milliseconds')::interval
          ELSE model_health.open_until
        END,
+       last_error = $4,
        updated_at = now()`,
-    [modelId, threshold, String(cooldownMs)],
+    [modelId, threshold, String(cooldownMs), lastError?.slice(0, 500) ?? null],
   );
 }
 
