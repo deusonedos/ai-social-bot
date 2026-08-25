@@ -15,7 +15,7 @@ const schema = z.object({
   OPENROUTER_API_KEY: z.string().min(10),
   OPENROUTER_BASE_URL: z.string().url().default('https://openrouter.ai/api/v1'),
   /** Уходят в заголовки OpenRouter, влияют на рейтинг приложения в их каталоге. */
-  OPENROUTER_APP_URL: z.string().default('https://github.com/local/ai-social-bot'),
+  OPENROUTER_APP_URL: z.string().default('https://github.com/deusonedos/ai-social-bot'),
   OPENROUTER_APP_NAME: z.string().default('AI Social Bot'),
 
   DATABASE_URL: z.string().min(1),
